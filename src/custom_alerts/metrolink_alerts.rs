@@ -195,10 +195,6 @@ pub async fn fetch_alert_page_data(
 pub async fn fetch_alerts_from_root_metrolink(
     client: &reqwest::Client,
 ) -> Result<Vec<RawAlertDetailsPage>, Box<dyn Error + Send + Sync>> {
-    //query the root page for text
-
-    //https://metrolinktrains.com/
-
     let main_page = client
         .get("https://metrolinktrains.com/")
         .send()
@@ -207,37 +203,29 @@ pub async fn fetch_alerts_from_root_metrolink(
         .await?;
 
     let document = Html::parse_document(&main_page);
-
-    // look for those big orange banners on the main page
-    //document.querySelectorAll(".alert")
     let selector = scraper::Selector::parse(".alert").unwrap();
-
     let alerts = document.select(&selector);
 
-    //collect hrefs from the alerts
+    let hrefs: Vec<String> = alerts
+        .filter_map(|alert| alert.value().attr("href"))
+        .map(|href| format!("https://metrolinktrains.com{}", href))
+        .collect();
 
-    let mut hrefs = vec![];
-
-    for alert in alerts {
-        if let Some(href) = alert.value().attr("href") {
-            hrefs.push(format!("https://metrolinktrains.com{}", href));
+    let fetch_tasks = hrefs.into_iter().map(|href| {
+        let client = client.clone();
+        async move {
+            fetch_alert_page_data(&href, &client)
+                .await
+                .map_err(|e| {
+                    eprintln!("Error fetching alert page {}: {}", href, e);
+                    e
+                })
+                .ok()
         }
-    }
+    });
 
-    drop(document);
-
-    // println!("alerts list: {:?}", hrefs);
-
-    // go to each webpage and get the information about the alerts
-
-    let mut alert_details = vec![];
-
-    for href in hrefs {
-        let alert = fetch_alert_page_data(&href, client).await?;
-        alert_details.push(alert);
-    }
-
-    println!("alert details: {:?}", alert_details);
+    let results = futures::future::join_all(fetch_tasks).await;
+    let alert_details: Vec<RawAlertDetailsPage> = results.into_iter().flatten().collect();
 
     Ok(alert_details)
 }
